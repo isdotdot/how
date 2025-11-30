@@ -19,6 +19,8 @@ DESCRIPTION_FALLBACK = "A simple, practical guide explaining how something works
 SYSTEM_PROMPT = """
 You write clear, step-by-step blog posts that answer 'How does ... work?' or 'How do I ... ?' questions.
 Tone: calm, practical, beginner-friendly. Focus on making the steps easy to follow.
+
+Never repeat topics that have already been covered on this site.
 """
 
 USER_PROMPT = """
@@ -29,6 +31,8 @@ The post should include:
 - A clear explanation of how the thing works OR the steps to do it.
 - Bulleted or numbered steps where appropriate.
 - A short summary with one or two practical tips.
+
+Choose a topic that has not been covered before on this site.
 
 Output format:
 - Plain Markdown only.
@@ -45,9 +49,26 @@ def slugify(title: str) -> str:
     slug = slug.strip("-")
     return slug or "post"
 
+def get_existing_topics_snippet() -> str:
+    titles = []
+    for p in CONTENT_DIR.glob("*.md"):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        m = re.search(r'^title\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if m:
+            titles.append(m.group(1))
+    titles = sorted(set(titles))
+    if not titles:
+        return ""
+    joined = "; ".join(titles[:50])
+    return f"\nExisting how-to topics already covered (do NOT repeat these): {joined}\n"
+
 def call_ollama() -> str:
     url = f"{OLLAMA_URL}/api/generate"
-    prompt = SYSTEM_PROMPT.strip() + "\n\n" + USER_PROMPT.strip()
+    history = get_existing_topics_snippet()
+    prompt = SYSTEM_PROMPT.strip() + history + "\n\n" + USER_PROMPT.strip()
 
     resp = requests.post(
         url,
@@ -111,6 +132,13 @@ def main():
 
     today = datetime.date.today().strftime("%Y-%m-%d")
     slug = slugify(title)
+
+    # Hard dedupe
+    existing_slugs = {p.stem.split("-", 3)[-1] for p in CONTENT_DIR.glob("*.md")}
+    if slug in existing_slugs:
+        print(f"Duplicate topic detected for slug '{slug}', skipping.")
+        return
+
     filename = f"{today}-{slug}.md"
     path = CONTENT_DIR / filename
     if path.exists():
